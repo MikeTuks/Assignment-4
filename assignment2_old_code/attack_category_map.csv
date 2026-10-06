@@ -1,0 +1,11 @@
+Attack Category Name,Mapping
+Normal,0
+Reconnaissance,1
+Backdoor,2
+DoS,3
+Exploits,4
+Analysis,5
+Fuzzers,6
+Worms,7
+Shellcode,8
+Generic,9
