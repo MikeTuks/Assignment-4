@@ -17,8 +17,7 @@ def vdm_tables(nom, y, n_levels):
     L = n_levels.max()
     D = np.zeros((nom.shape[1], L, L))
     for a in range(nom.shape[1]):
-        cnt = np.zeros((L, K))
-        np.add.at(cnt, (nom[:, a], y), 1)
+        cnt = np.bincount(nom[:, a] * K + y, minlength=L * K).reshape(L, K)
         P = cnt / np.maximum(cnt.sum(1, keepdims=True), 1)
         D[a] = ((P[:, None, :] - P[None, :, :]) ** 2).sum(2)
     return D

@@ -4,6 +4,7 @@
   oob     OOB macro-F1 against the number of trees (50-1,000)
   base    k-NN and tree (the revised assignment 2 models)
   forest  bagging and random forest; needs oob
+  fixedtree  untuned Gini tree, no depth limit, on the outer folds (Q1 control)
   stack   stack, its removal variants and soft voting; needs base and forest
 base and forest run every inner task first, then one outer task per fold.
 """
@@ -30,7 +31,7 @@ from pathlib import Path  # noqa: E402
 import numpy as np  # noqa: E402
 import pandas as pd  # noqa: E402
 
-from data import (K, METRICS, dataset, inner_folds, macro_f1,  # noqa: E402
+from data import (K, METRICS, N_INNER, N_OUTER, dataset, inner_folds, macro_f1,  # noqa: E402
                   outer_folds, scores)
 from forest import forest  # noqa: E402
 from knn import neighbours, vote  # noqa: E402
@@ -53,6 +54,7 @@ GRIDS = {
 # model: (grid it is tuned on, which settings of that grid it may select).
 # Bagging and the forest share one grid but select disjoint settings.
 MODELS = {"knn": ("knn", lambda p: True), "tree": ("tree", lambda p: True),
+          "tree_fixed": ("tree", lambda p: True),
           "bagging": ("forest", lambda p: p["mtry"] == "all"),
           "forest": ("forest", lambda p: p["mtry"] != "all")}
 STAGES = {"base": ("knn", "tree"), "forest": ("bagging", "forest")}
@@ -61,6 +63,7 @@ META_GRID = [dict(C=C, cw=w) for C, w in product((0.01, 0.1, 1, 10, 100, 1000),
 OOB_PARAMS = dict(mtry="0.3", min_leaf=1, cw="none")     # mid-grid
 OOB_RECORD = (50, *range(100, 1001, 100))
 BASE = ("knn", "tree", "forest")
+TREE_FIXED = dict(crit="gini", max_depth=-1, min_leaf=1, cw="none")
 STACKS = {"stack": (0, 1, 2), "stack_no_knn": (1, 2), "stack_no_tree": (0, 2),
           "stack_no_forest": (0, 1)}
 
@@ -254,7 +257,7 @@ def select(model, repeat, outer):
     s = inner[(inner.model == grid_name) & (inner.repeat == repeat) & (inner.outer == outer)]
     g = s.groupby("cfg").macro_f1.agg(["mean", "size"])
     grid = GRIDS[grid_name]
-    assert len(g) == len(grid) and (g["size"] == 3).all(), f"incomplete inner runs: {model}"
+    assert len(g) == len(grid) and (g["size"] == N_INNER).all(), f"incomplete inner runs: {model}"
     keep = [c for c in g.index if allowed(grid[c])]
     return grid[g.loc[keep, "mean"].idxmax()]
 
@@ -275,13 +278,13 @@ def selected_params(model, repeat, outer):
 def main():
     p = argparse.ArgumentParser(description=__doc__,
                                 formatter_class=argparse.RawDescriptionHelpFormatter)
-    p.add_argument("--stage", required=True, choices=("pilot", "oob", *STAGES, "stack"))
+    p.add_argument("--stage", required=True, choices=("pilot", "oob", *STAGES, "fixedtree", "stack"))
     p.add_argument("--repeats", type=int, default=1, help="repeat r uses seed r")
     p.add_argument("--workers", type=int, default=12)
     a = p.parse_args()
     PREDS.mkdir(parents=True, exist_ok=True)
     dataset()       # load before the pool: forked workers share it
-    ro = list(product(range(a.repeats), range(5)))
+    ro = list(product(range(a.repeats), range(N_OUTER)))
 
     if a.stage == "pilot":
         rows = []
@@ -305,10 +308,13 @@ def main():
             # k-NN scores its whole grid from one neighbour list, so one task per fold.
             batches = [tuple(range(n))] if g == "knn" else [(c,) for c in range(n)]
             inner += [task("inner", g, r, o, inner=i, cfgs=b, n_trees=nt)
-                      for r, o in ro for i in range(3) for b in batches]
+                      for r, o in ro for i in range(N_INNER) for b in batches]
         run(inner, INNER, a.workers)
         run([task("outer", m, r, o, params=select(m, r, o), n_trees=nt)
              for m in STAGES[a.stage] for r, o in ro], OUTER, a.workers)
+    elif a.stage == "fixedtree":
+        run([task("outer", "tree_fixed", r, o, params=TREE_FIXED) for r, o in ro],
+            OUTER, a.workers)
     else:
         nt = chosen_n_trees()
         run([task("stack", "stack", r, o, n_trees=nt,

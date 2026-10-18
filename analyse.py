@@ -7,13 +7,23 @@ import numpy as np
 import pandas as pd
 from scipy import stats
 
-from data import CLASSES, K, METRICS, confusion, dataset, per_class
+from data import CLASSES, K, METRICS, N_INNER, N_OUTER, confusion, dataset, per_class
 from run import OOB, OOB_RECORD, OUTER, STACKS, chosen_n_trees, forest_inner, pred_path
 
 MODELS = ["knn", "tree", "bagging", "forest", "stack"]
 VARIANTS = [m for m in STACKS if m != "stack"]      # stacks with one base model removed
 REMOVAL = [*STACKS, "soft_vote"]
 ALPHA = 0.05
+
+
+def wins(d):
+    return f"{(d > 0).sum()}/{len(d)} folds"
+
+
+def verdict(p):
+    return "significant" if p < ALPHA else "not significant"
+
+
 # (a, b, question): two-sided test of a - b = 0. "removal" tests are exploratory.
 TESTS = [("bagging", "tree", "Q1"), ("forest", "bagging", "Q2"), ("stack", "forest", "Q4"),
          ("stack", "stack_no_knn", "Q5"), ("stack", "stack_no_tree", "removal"),
@@ -25,7 +35,7 @@ def load():
     o = pd.read_csv(OUTER)
     repeats = o.repeat.nunique()
     assert sorted(o.repeat.unique()) == list(range(repeats)), "a repeat is missing"
-    J = 5 * repeats
+    J = N_OUTER * repeats
     n_oob = len(pd.read_csv(OOB))
     assert n_oob == J * len(OOB_RECORD), f"oob: {n_oob} rows, expected {J * len(OOB_RECORD)}"
     counts = o.model.value_counts()
@@ -66,7 +76,7 @@ def holm(p):
 def pooled(m, repeat=0):
     """True labels and predictions over all outer test folds of one repeat."""
     y = dataset().y
-    parts = [np.load(pred_path(m, repeat, o)) for o in range(5)]
+    parts = [np.load(pred_path(m, repeat, o)) for o in range(N_OUTER)]
     rows = np.concatenate([p["rows"] for p in parts])
     return y[rows], np.concatenate([p["proba"].argmax(1) for p in parts])
 
@@ -111,8 +121,8 @@ def main():
     for f in (fam, ~fam):
         ph_all[f] = holm([r[1] for r, k in zip(res, f) if k])
     for (a, b, q), d, (t, p), ph in zip(TESTS, diffs, res, ph_all):
-        print(f"{q:8} {a} - {b}: diff {d.mean():+.4f}, {(d > 0).sum()}/{len(d)} folds, "
-              f"t={t:.2f}, p={p:.4g}, p_holm={ph:.4g}, {'significant' if ph < ALPHA else 'not significant'}")
+        print(f"{q:8} {a} - {b}: diff {d.mean():+.4f}, {wins(d)}, "
+              f"t={t:.2f}, p={p:.4g}, p_holm={ph:.4g}, {verdict(ph)}")
 
     print("\n== Q3: class weighting ==")
     for m in ("bagging", "forest"):
@@ -122,14 +132,14 @@ def main():
     mean = fi.groupby(["mtry", "min_leaf", "cw"]).macro_f1.mean().unstack("cw")
     print((mean.sub(mean["none"], axis=0)).round(4).to_string())
     # Per outer fold: best weighted minus best unweighted mean inner score. Inner folds
-    # hold out 1/3, so the correction uses n_test/n_train = 1/2.
+    # hold out 1/N_INNER, so the correction uses n_test/n_train = 1/(N_INNER - 1).
     best = fi.groupby(["repeat", "outer", fi.cw != "none", "cfg"]).macro_f1.mean() \
         .groupby(level=[0, 1, 2]).max().unstack()
     d = (best[True] - best[False]).to_numpy()
-    t, p = nadeau_bengio(d, 1, 2)
+    t, p = nadeau_bengio(d, 1, N_INNER - 1)
     print(f"forest, best weighted - best unweighted inner macro-F1: diff {d.mean():+.4f}, "
-          f"{(d > 0).sum()}/{len(d)} folds, t={t:.2f}, p={p:.4g}, "
-          f"{'significant' if p < ALPHA else 'not significant'} (uncorrected for the other tests)")
+          f"{wins(d)}, t={t:.2f}, p={p:.4g}, "
+          f"{verdict(p)} (uncorrected for the other tests)")
 
     print("\n== Removal test ==")
     print(o.groupby("model")[["macro_f1", "balanced_accuracy"]].agg(["mean", "std"])
@@ -158,7 +168,7 @@ def main():
 
 def paired(o, a, b, metric):
     d = by_fold(o, a, metric) - by_fold(o, b, metric)
-    return f"{a} - {b} {metric}: {d.mean():+.4f}, higher in {(d > 0).sum()}/{len(d)} folds"
+    return f"{a} - {b} {metric}: {d.mean():+.4f}, higher in {wins(d)}"
 
 
 def by_cw(o, m, weighted):

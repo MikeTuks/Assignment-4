@@ -14,6 +14,7 @@ from a2_data_checks import (CLASSES, NOMINAL, correlated_pairs, drop_corr,  # no
                             load, numeric)
 
 K = len(CLASSES)
+N_OUTER, N_INNER = 5, 3
 METRICS = ["macro_f1", "balanced_accuracy", "precision_macro", "recall_macro", "accuracy"]
 
 
@@ -48,13 +49,13 @@ def dataset():
 
 def outer_folds(y, seed):
     """Seed 0 gives the assignment 2 folds."""
-    skf = StratifiedKFold(5, shuffle=True, random_state=seed)
+    skf = StratifiedKFold(N_OUTER, shuffle=True, random_state=seed)
     return list(skf.split(np.zeros(len(y)), y))
 
 
 def inner_folds(y, train, seed):
-    """3 folds inside an outer training set, as row indices of the full data."""
-    skf = StratifiedKFold(3, shuffle=True, random_state=seed)
+    """N_INNER folds inside an outer training set, as row indices of the full data."""
+    skf = StratifiedKFold(N_INNER, shuffle=True, random_state=seed)
     return [(train[a], train[b]) for a, b in skf.split(np.zeros(len(train)), y[train])]
 
 
